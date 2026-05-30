@@ -1,7 +1,111 @@
-import { useState, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import * as XLSX from "xlsx";
+import { supabase } from "./supabase.js";
 
-// ─── EXCEL EXPORT ────────────────────────────────────────────────────────────
+// ─── SUPABASE HOOKS ──────────────────────────────────────────────────────────
+function useProjects() {
+  const [projects, setProjects] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("projects").select("*").order("created_at", { ascending: false });
+    if (data) setProjects(data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    load();
+    // Realtime: обновления у всей команды сразу
+    const channel = supabase.channel("projects_rt")
+      .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, load)
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [load]);
+
+  const addProject = async (f) => {
+    const { data } = await supabase.from("projects").insert([{ ...f, amount: Number(f.amount) }]).select().single();
+    if (data) setProjects(p => [data, ...p]);
+  };
+
+  const updateProject = async (id, f) => {
+    const { data } = await supabase.from("projects").update({ ...f, amount: Number(f.amount) }).eq("id", id).select().single();
+    if (data) setProjects(p => p.map(x => x.id === id ? data : x));
+  };
+
+  const deleteProject = async (id) => {
+    await supabase.from("projects").delete().eq("id", id);
+    setProjects(p => p.filter(x => x.id !== id));
+  };
+
+  return { projects, setProjects, loading, addProject, updateProject, deleteProject };
+}
+
+function useTasks() {
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
+    if (data) setTasks(data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    load();
+    const channel = supabase.channel("tasks_rt")
+      .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, load)
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [load]);
+
+  const addTask = async (f) => {
+    const { data } = await supabase.from("tasks").insert([f]).select().single();
+    if (data) setTasks(t => [data, ...t]);
+  };
+
+  const updateTask = async (id, f) => {
+    const { data } = await supabase.from("tasks").update(f).eq("id", id).select().single();
+    if (data) setTasks(t => t.map(x => x.id === id ? data : x));
+  };
+
+  const deleteTask = async (id) => {
+    await supabase.from("tasks").delete().eq("id", id);
+    setTasks(t => t.filter(x => x.id !== id));
+  };
+
+  return { tasks, setTasks, loading, addTask, updateTask, deleteTask };
+}
+
+function useManagers() {
+  const [managers, setManagers] = useState([]);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("managers").select("*").eq("active", true).order("name");
+    if (data) setManagers(data.map(m => m.name));
+  }, []);
+
+  useEffect(() => {
+    load();
+    const channel = supabase.channel("managers_rt")
+      .on("postgres_changes", { event: "*", schema: "public", table: "managers" }, load)
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [load]);
+
+  const addManager = async (name, role = "Менеджер") => {
+    await supabase.from("managers").insert([{ name, role }]);
+    await load();
+  };
+
+  const removeManager = async (name) => {
+    await supabase.from("managers").update({ active: false }).eq("name", name);
+    await load();
+  };
+
+  return { managers, addManager, removeManager };
+}
+
+
 const exportToExcel = (projects, tasks, sheetName = "all") => {
   const wb = XLSX.utils.book_new();
 
@@ -54,39 +158,12 @@ const exportToExcel = (projects, tasks, sheetName = "all") => {
   XLSX.writeFile(wb, `МСБ_Отчёт_${date}.xlsx`);
 };
 
-// ─── INITIAL DATA ────────────────────────────────────────────────────────────
-const MANAGERS = ["Айгерим Б.", "Нурлан С.", "Дамир К.", "Гульнара Т.", "Асхат М."];
-
+// ─── CONSTANTS ───────────────────────────────────────────────────────────────
 const PROJECT_STAGES = ["Рассмотрение", "Анализ", "Кредитный комитет", "Решение", "Выдача"];
-
 const TASK_TYPES = ["Реструктуризация", "Высвобождение залога", "Предоставление", "Письмо клиента", "Мониторинг"];
-
 const TASK_STATUSES = ["Новая", "В работе", "На согласовании", "Выполнено"];
-
 const PRIORITIES = ["Высокий", "Средний", "Низкий"];
-
-const initProjects = [
-  { id: 1, client: "ТОО «Байтерек Констракшн»", amount: 85000000, manager: "Айгерим Б.", stage: "Анализ", type: "Инвестиционный", date: "2026-05-10", notes: "Строительство склада" },
-  { id: 2, client: "ИП Сейтжанов А.К.", amount: 12500000, manager: "Нурлан С.", stage: "Рассмотрение", type: "Оборотный", date: "2026-05-20", notes: "Торговля стройматериалами" },
-  { id: 3, client: "ТОО «Южный рынок»", amount: 45000000, manager: "Дамир К.", stage: "Кредитный комитет", type: "Оборотный", date: "2026-05-05", notes: "" },
-  { id: 4, client: "ИП Мамытбеков Р.", amount: 8000000, manager: "Гульнара Т.", stage: "Решение", type: "Оборотный", date: "2026-04-28", notes: "Ждёт подписи директора" },
-  { id: 5, client: "ТОО «АгроПродукт»", amount: 120000000, manager: "Асхат М.", stage: "Анализ", type: "Инвестиционный", date: "2026-05-15", notes: "Переработка с/х продукции" },
-  { id: 6, client: "ТОО «Казмет Трейд»", amount: 30000000, manager: "Айгерим Б.", stage: "Выдача", type: "Оборотный", date: "2026-04-22", notes: "" },
-  { id: 7, client: "ИП Оспанова Г.Б.", amount: 5500000, manager: "Нурлан С.", stage: "Рассмотрение", type: "Оборотный", date: "2026-05-22", notes: "Розничная торговля" },
-  { id: 8, client: "ТОО «СтройГрупп»", amount: 200000000, manager: "Дамир К.", stage: "Анализ", type: "Инвестиционный", date: "2026-05-12", notes: "Производственный цех" },
-];
-
-const today = new Date("2026-05-24");
-const initTasks = [
-  { id: 1, type: "Реструктуризация", client: "ТОО «АлтынСервис»", manager: "Айгерим Б.", status: "В работе", priority: "Высокий", deadline: "2026-05-26", notes: "Изменение графика платежей, запрос в ДКО отправлен" },
-  { id: 2, type: "Высвобождение залога", client: "ИП Бекова А.", manager: "Нурлан С.", status: "На согласовании", priority: "Средний", deadline: "2026-05-28", notes: "Частичное высвобождение недвижимости" },
-  { id: 3, type: "Письмо клиента", client: "ТОО «КазСнаб»", manager: "Гульнара Т.", status: "Новая", priority: "Высокий", deadline: "2026-05-24", notes: "Запрос справки об остатке долга" },
-  { id: 4, type: "Предоставление", client: "ТОО «Меридиан»", manager: "Дамир К.", status: "В работе", priority: "Средний", deadline: "2026-05-30", notes: "Подготовить пакет документов для юристов" },
-  { id: 5, type: "Мониторинг", client: "ТОО «Байтерек Констракшн»", manager: "Асхат М.", status: "Новая", priority: "Низкий", deadline: "2026-06-05", notes: "Квартальный мониторинг залогов" },
-  { id: 6, type: "Реструктуризация", client: "ИП Жумабеков Н.", manager: "Нурлан С.", status: "Выполнено", priority: "Высокий", deadline: "2026-05-20", notes: "" },
-  { id: 7, type: "Письмо клиента", client: "ТОО «ЮгТорг»", manager: "Айгерим Б.", status: "Выполнено", priority: "Низкий", deadline: "2026-05-18", notes: "Ответ подготовлен и отправлен" },
-  { id: 8, type: "Высвобождение залога", client: "ТОО «АгроПродукт»", manager: "Асхат М.", status: "В работе", priority: "Высокий", deadline: "2026-05-25", notes: "Акт оценки получен, ждёт визы" },
-];
+const today = new Date();
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 const fmt = (n) => new Intl.NumberFormat("ru-KZ", { maximumFractionDigits: 0 }).format(n) + " ₸";
@@ -232,8 +309,8 @@ const Btn = ({ onClick, children, variant = "primary", small }) => {
 const blankTask = () => ({ type: TASK_TYPES[0], client: "", manager: MANAGERS[0], status: "Новая", priority: "Средний", deadline: "", notes: "" });
 const blankProject = () => ({ client: "", amount: "", manager: MANAGERS[0], stage: "Рассмотрение", type: "Оборотный", date: new Date().toISOString().slice(0, 10), notes: "" });
 
-function TaskForm({ init, onSave, onClose }) {
-  const [f, setF] = useState(init || blankTask());
+function TaskForm({ init, onSave, onClose, managers = [] }) {
+  const [f, setF] = useState(init || { type: TASK_TYPES[0], client: "", manager: managers[0] || "", status: "Новая", priority: "Средний", deadline: "", notes: "" });
   const set = (k) => (e) => setF(p => ({ ...p, [k]: e.target.value }));
   return (
     <div>
@@ -254,8 +331,8 @@ function TaskForm({ init, onSave, onClose }) {
   );
 }
 
-function ProjectForm({ init, onSave, onClose }) {
-  const [f, setF] = useState(init || blankProject());
+function ProjectForm({ init, onSave, onClose, managers = [] }) {
+  const [f, setF] = useState(init || { client: "", amount: "", manager: managers[0] || "", stage: "Рассмотрение", type: "Оборотный", date: new Date().toISOString().slice(0, 10), notes: "" });
   const set = (k) => (e) => setF(p => ({ ...p, [k]: e.target.value }));
   return (
     <div>
@@ -387,7 +464,7 @@ function Dashboard({ tasks, projects, setView }) {
   );
 }
 
-function Projects({ projects, setProjects }) {
+function Projects({ projects, managers, addProject, updateProject, deleteProject }) {
   const [modal, setModal] = useState(null); // null | "add" | {project}
   const [filter, setFilter] = useState({ manager: "Все", stage: "Все", search: "" });
 
@@ -398,10 +475,6 @@ function Projects({ projects, setProjects }) {
   ).sort((a, b) => new Date(b.date) - new Date(a.date));
 
   const totalAmt = filtered.reduce((s, p) => s + Number(p.amount), 0);
-
-  const addProject = (f) => setProjects(p => [...p, { ...f, id: Date.now(), amount: Number(f.amount) }]);
-  const updateProject = (id, f) => setProjects(p => p.map(x => x.id === id ? { ...x, ...f, amount: Number(f.amount) } : x));
-  const deleteProject = (id) => { setProjects(p => p.filter(x => x.id !== id)); setModal(null); };
 
   return (
     <div>
@@ -420,7 +493,7 @@ function Projects({ projects, setProjects }) {
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <input value={filter.search} onChange={e => setFilter(p => ({ ...p, search: e.target.value }))} placeholder="🔍 Поиск по клиенту..." style={{ flex: 1, minWidth: 160, background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", color: C.text, fontSize: 12, outline: "none" }} />
         <select value={filter.manager} onChange={e => setFilter(p => ({ ...p, manager: e.target.value }))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", color: C.text, fontSize: 12, outline: "none" }}>
-          {["Все", ...MANAGERS].map(m => <option key={m}>{m}</option>)}
+          {["Все", ...managers].map(m => <option key={m}>{m}</option>)}
         </select>
         <select value={filter.stage} onChange={e => setFilter(p => ({ ...p, stage: e.target.value }))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", color: C.text, fontSize: 12, outline: "none" }}>
           {["Все", ...PROJECT_STAGES].map(s => <option key={s}>{s}</option>)}
@@ -468,12 +541,12 @@ function Projects({ projects, setProjects }) {
 
       <Modal open={!!modal} onClose={() => setModal(null)}
         title={modal === "add" ? "Новый проект" : "Редактировать проект"}>
-        {modal === "add" && <ProjectForm onSave={addProject} onClose={() => setModal(null)} />}
+        {modal === "add" && <ProjectForm managers={managers} onSave={async (f) => { await addProject(f); setModal(null); }} onClose={() => setModal(null)} />}
         {modal && modal !== "add" && (
           <div>
-            <ProjectForm init={modal} onSave={(f) => { updateProject(modal.id, f); setModal(null); }} onClose={() => setModal(null)} />
+            <ProjectForm managers={managers} init={modal} onSave={async (f) => { await updateProject(modal.id, f); setModal(null); }} onClose={() => setModal(null)} />
             <div style={{ marginTop: 8, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
-              <Btn variant="danger" small onClick={() => deleteProject(modal.id)}>🗑 Удалить проект</Btn>
+              <Btn variant="danger" small onClick={async () => { await deleteProject(modal.id); setModal(null); }}>🗑 Удалить проект</Btn>
             </div>
           </div>
         )}
@@ -482,7 +555,7 @@ function Projects({ projects, setProjects }) {
   );
 }
 
-function Tasks({ tasks, setTasks }) {
+function Tasks({ tasks, managers, addTask, updateTask, deleteTask }) {
   const [modal, setModal] = useState(null);
   const [filter, setFilter] = useState({ manager: "Все", status: "Все", type: "Все", search: "" });
 
@@ -497,10 +570,6 @@ function Tasks({ tasks, setTasks }) {
     if (oa !== ob) return oa - ob;
     return new Date(a.deadline || "9999") - new Date(b.deadline || "9999");
   });
-
-  const addTask = (f) => setTasks(p => [...p, { ...f, id: Date.now() }]);
-  const updateTask = (id, f) => setTasks(p => p.map(x => x.id === id ? { ...x, ...f } : x));
-  const deleteTask = (id) => { setTasks(p => p.filter(x => x.id !== id)); setModal(null); };
 
   return (
     <div>
@@ -566,10 +635,10 @@ function Tasks({ tasks, setTasks }) {
 
       <Modal open={!!modal} onClose={() => setModal(null)}
         title={modal === "add" ? "Новая задача" : "Редактировать задачу"}>
-        {modal === "add" && <TaskForm onSave={addTask} onClose={() => setModal(null)} />}
+        {modal === "add" && <TaskForm managers={managers} onSave={addTask} onClose={() => setModal(null)} />}
         {modal && modal !== "add" && (
           <div>
-            <TaskForm init={modal} onSave={(f) => { updateTask(modal.id, f); setModal(null); }} onClose={() => setModal(null)} />
+            <TaskForm managers={managers} init={modal} onSave={(f) => { updateTask(modal.id, f); setModal(null); }} onClose={() => setModal(null)} />
             <div style={{ marginTop: 8, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
               <Btn variant="danger" small onClick={() => deleteTask(modal.id)}>🗑 Удалить задачу</Btn>
             </div>
@@ -580,15 +649,23 @@ function Tasks({ tasks, setTasks }) {
   );
 }
 
-function Team({ tasks, projects }) {
+function Team({ tasks, projects, managers, addManager, removeManager }) {
+  const [modal, setModal] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newRole, setNewRole] = useState("Менеджер");
+
   return (
     <div>
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 22, fontWeight: 800, color: C.text, fontFamily: "'DM Serif Display', serif" }}>Команда</div>
-        <div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>Нагрузка менеджеров</div>
+      <div style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: C.text, fontFamily: "'DM Serif Display', serif" }}>Команда</div>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{managers.length} менеджеров</div>
+        </div>
+        <Btn onClick={() => setModal(true)}>+ Менеджер</Btn>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minWidth(280px, 1fr))", gap: 14 }}>
-        {MANAGERS.map(m => {
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+        {managers.map(m => {
           const mProjects = projects.filter(p => p.manager === m && p.stage !== "Выдача");
           const mTasks = tasks.filter(t => t.manager === m && t.status !== "Выполнено");
           const mOver = mTasks.filter(t => isOverdue(t.deadline, t.status));
@@ -599,11 +676,12 @@ function Team({ tasks, projects }) {
                 <div style={{ width: 40, height: 40, borderRadius: 20, background: C.accent + "22", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, color: C.accent }}>
                   {m[0]}
                 </div>
-                <div>
+                <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 700, color: C.text, fontSize: 14 }}>{m}</div>
                   <div style={{ fontSize: 11, color: C.muted }}>Менеджер</div>
                 </div>
                 {mOver.length > 0 && <Chip label={`${mOver.length} просроч.`} color={C.danger} />}
+                <button onClick={() => removeManager(m)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16, padding: 4 }} title="Удалить">🗑</button>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
                 <div style={{ textAlign: "center", background: C.surface, borderRadius: 8, padding: "10px 6px" }}>
@@ -619,7 +697,6 @@ function Team({ tasks, projects }) {
                   <div style={{ fontSize: 10, color: C.muted }}>Выполнено</div>
                 </div>
               </div>
-              {/* Active tasks */}
               {mTasks.slice(0, 3).map(t => (
                 <div key={t.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, fontSize: 11 }}>
                   <span>{typeIcon(t.type)}</span>
@@ -633,6 +710,19 @@ function Team({ tasks, projects }) {
           );
         })}
       </div>
+
+      <Modal open={modal} onClose={() => { setModal(false); setNewName(""); }} title="Добавить менеджера">
+        <Field label="Имя менеджера">
+          <Input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Например: Берик А." />
+        </Field>
+        <Field label="Должность">
+          <Input value={newRole} onChange={e => setNewRole(e.target.value)} placeholder="Менеджер" />
+        </Field>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <Btn variant="ghost" onClick={() => { setModal(false); setNewName(""); }}>Отмена</Btn>
+          <Btn onClick={async () => { if (newName.trim()) { await addManager(newName.trim(), newRole); setModal(false); setNewName(""); } }}>Добавить</Btn>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -658,10 +748,23 @@ function useIsMobile() {
 
 export default function App() {
   const [view, setView] = useState("dashboard");
-  const [tasks, setTasks] = useState(initTasks);
-  const [projects, setProjects] = useState(initProjects);
+  const { projects, loading: pLoad, addProject, updateProject, deleteProject } = useProjects();
+  const { tasks, loading: tLoad, addTask, updateTask, deleteTask } = useTasks();
+  const { managers, addManager, removeManager } = useManagers();
   const isMobile = useIsMobile();
   const overdue = tasks.filter(t => isOverdue(t.deadline, t.status)).length;
+  const loading = pLoad || tLoad;
+
+  if (loading) return (
+    <div style={{ height: "100vh", background: C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
+      <div style={{ fontSize: 40 }}>🏦</div>
+      <div style={{ fontSize: 16, color: C.accent, fontWeight: 700 }}>МСБ Кредит</div>
+      <div style={{ fontSize: 12, color: C.muted }}>Загрузка данных...</div>
+      <div style={{ width: 180, height: 3, background: C.border, borderRadius: 2, overflow: "hidden", marginTop: 8 }}>
+        <div style={{ height: "100%", width: "60%", background: C.accent, borderRadius: 2, animation: "none" }} />
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", height: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', system-ui, sans-serif", overflow: "hidden" }}>
@@ -742,9 +845,9 @@ export default function App() {
       {/* ── Main Content ── */}
       <div style={{ flex: 1, overflow: "auto", padding: isMobile ? "16px 14px 80px" : "28px 28px" }}>
         {view === "dashboard" && <Dashboard tasks={tasks} projects={projects} setView={setView} />}
-        {view === "projects" && <Projects projects={projects} setProjects={setProjects} />}
-        {view === "tasks" && <Tasks tasks={tasks} setTasks={setTasks} />}
-        {view === "team" && <Team tasks={tasks} projects={projects} />}
+        {view === "projects" && <Projects projects={projects} managers={managers} addProject={addProject} updateProject={updateProject} deleteProject={deleteProject} />}
+        {view === "tasks" && <Tasks tasks={tasks} managers={managers} addTask={addTask} updateTask={updateTask} deleteTask={deleteTask} />}
+        {view === "team" && <Team tasks={tasks} projects={projects} managers={managers} addManager={addManager} removeManager={removeManager} />}
       </div>
 
       {/* ── MOBILE: Bottom Tab Bar ── */}
