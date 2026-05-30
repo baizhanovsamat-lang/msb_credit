@@ -141,8 +141,9 @@ const exportToExcel = (projects, tasks, sheetName = "all") => {
   }
 
   if (sheetName === "all") {
-    // Summary sheet
-    const summary = MANAGERS.map(m => ({
+    // Summary sheet — derive managers from data
+    const managerNames = [...new Set([...projects.map(p => p.manager), ...tasks.map(t => t.manager)])].filter(Boolean);
+    const summary = managerNames.map(m => ({
       "Менеджер": m,
       "Активных проектов": projects.filter(p => p.manager === m && p.stage !== "Выдача").length,
       "Активных задач": tasks.filter(t => t.manager === m && t.status !== "Выполнено").length,
@@ -306,8 +307,8 @@ const Btn = ({ onClick, children, variant = "primary", small }) => {
 };
 
 // ─── FORMS ────────────────────────────────────────────────────────────────────
-const blankTask = () => ({ type: TASK_TYPES[0], client: "", manager: MANAGERS[0], status: "Новая", priority: "Средний", deadline: "", notes: "" });
-const blankProject = () => ({ client: "", amount: "", manager: MANAGERS[0], stage: "Рассмотрение", type: "Оборотный", date: new Date().toISOString().slice(0, 10), notes: "" });
+const blankTask = () => ({ type: TASK_TYPES[0], client: "", manager: "", status: "Новая", priority: "Средний", deadline: "", notes: "" });
+const blankProject = () => ({ client: "", amount: "", manager: "", stage: "Рассмотрение", type: "Оборотный", date: new Date().toISOString().slice(0, 10), notes: "" });
 
 function TaskForm({ init, onSave, onClose, managers = [] }) {
   const [f, setF] = useState(init || { type: TASK_TYPES[0], client: "", manager: managers[0] || "", status: "Новая", priority: "Средний", deadline: "", notes: "" });
@@ -317,7 +318,7 @@ function TaskForm({ init, onSave, onClose, managers = [] }) {
       <Field label="Тип задачи"><Select value={f.type} onChange={set("type")} options={TASK_TYPES} /></Field>
       <Field label="Клиент"><Input value={f.client} onChange={set("client")} placeholder="Наименование клиента" /></Field>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <Field label="Ответственный"><Select value={f.manager} onChange={set("manager")} options={MANAGERS} /></Field>
+        <Field label="Ответственный"><Select value={f.manager} onChange={set("manager")} options={managers} /></Field>
         <Field label="Статус"><Select value={f.status} onChange={set("status")} options={TASK_STATUSES} /></Field>
         <Field label="Приоритет"><Select value={f.priority} onChange={set("priority")} options={PRIORITIES} /></Field>
         <Field label="Срок исполнения"><Input type="date" value={f.deadline} onChange={set("deadline")} /></Field>
@@ -340,7 +341,7 @@ function ProjectForm({ init, onSave, onClose, managers = [] }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Field label="Сумма (₸)"><Input type="number" value={f.amount} onChange={set("amount")} placeholder="0" /></Field>
         <Field label="Тип финансирования"><Select value={f.type} onChange={set("type")} options={["Оборотный", "Инвестиционный", "Рефинансирование"]} /></Field>
-        <Field label="Ответственный менеджер"><Select value={f.manager} onChange={set("manager")} options={MANAGERS} /></Field>
+        <Field label="Ответственный менеджер"><Select value={f.manager} onChange={set("manager")} options={managers} /></Field>
         <Field label="Стадия"><Select value={f.stage} onChange={set("stage")} options={PROJECT_STAGES} /></Field>
         <Field label="Дата поступления"><Input type="date" value={f.date} onChange={set("date")} /></Field>
       </div>
@@ -363,7 +364,8 @@ function Dashboard({ tasks, projects, setView }) {
   const stageCounts = PROJECT_STAGES.reduce((a, s) => { a[s] = projects.filter(p => p.stage === s).length; return a; }, {});
   const totalAmt = projects.filter(p => p.stage !== "Выдача").reduce((s, p) => s + Number(p.amount), 0);
 
-  const byManager = MANAGERS.map(m => ({
+  const managerNames = [...new Set([...projects.map(p => p.manager), ...tasks.map(t => t.manager)])].filter(Boolean);
+  const byManager = managerNames.map(m => ({
     name: m,
     projects: projects.filter(p => p.manager === m && p.stage !== "Выдача").length,
     tasks: tasks.filter(t => t.manager === m && t.status !== "Выполнено").length,
@@ -586,7 +588,7 @@ function Tasks({ tasks, managers, addTask, updateTask, deleteTask }) {
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <input value={filter.search} onChange={e => setFilter(p => ({ ...p, search: e.target.value }))} placeholder="🔍 Клиент..." style={{ flex: 1, minWidth: 140, background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", color: C.text, fontSize: 12, outline: "none" }} />
-        {[["manager", ["Все", ...MANAGERS]], ["status", ["Все", ...TASK_STATUSES]], ["type", ["Все", ...TASK_TYPES]]].map(([k, opts]) => (
+        {[["status", ["Все", ...TASK_STATUSES]], ["type", ["Все", ...TASK_TYPES]]].map(([k, opts]) => (
           <select key={k} value={filter[k]} onChange={e => setFilter(p => ({ ...p, [k]: e.target.value }))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", color: C.text, fontSize: 12, outline: "none" }}>
             {opts.map(o => <option key={o}>{o}</option>)}
           </select>
